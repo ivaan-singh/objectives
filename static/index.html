@@ -504,6 +504,8 @@ async function initApp(username){
   document.getElementById('content-screen').classList.remove('visible');
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   await loadObjectives();
+  const allNav=document.querySelector('.nav-item');
+  showFilter('all', allNav);
 }
 async function loadObjectives(){
   try{
