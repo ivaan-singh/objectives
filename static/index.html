@@ -512,6 +512,7 @@ async function loadObjectives(){
     objectives=await api('GET','/objectives');
     updateCounts();
     if(document.getElementById('content-screen').classList.contains('visible')) render();
+    scheduleNotifications();
   }catch(e){console.error(e);}
 }
 
@@ -745,6 +746,65 @@ function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g
   try{const r=await api('GET','/me');await initApp(r.username);}
   catch(e){}
 })();
+
+// ── Notifications ──
+let notifPermission = Notification.permission;
+let swReg = null;
+let notifInterval = null;
+
+async function initNotifications() {
+  if (!('serviceWorker' in navigator) || !('Notification' in window)) return;
+  try {
+    swReg = await navigator.serviceWorker.register('/sw.js');
+  } catch(e) { console.warn('SW registration failed:', e); }
+}
+
+async function requestNotifPermission() {
+  if (notifPermission === 'granted') return true;
+  notifPermission = await Notification.requestPermission();
+  return notifPermission === 'granted';
+}
+
+function scheduleNotifications() {
+  // Send objectives to SW
+  if (swReg && swReg.active) {
+    swReg.active.postMessage({ type: 'SCHEDULE', objectives });
+  }
+  // Also run a local interval check (works while tab is open)
+  if (notifInterval) clearInterval(notifInterval);
+  notifInterval = setInterval(() => {
+    if (notifPermission !== 'granted') return;
+    const now = new Date();
+    const hhmm = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+    // Only fire at the exact minute (prevent double-firing)
+    if (now.getSeconds() > 5) return;
+    for (const obj of objectives) {
+      if (obj.notif && obj.notif_time === hhmm) {
+        new Notification('Objectives — ' + obj.title, {
+          body: obj.desc || 'Time to work on your objective.',
+          icon: '/icon.png',
+          tag: 'obj-' + obj.id
+        });
+      }
+    }
+  }, 10000); // check every 10s
+}
+
+// Hook into notif toggle — ask permission when turned on
+async function onNotifChange() {
+  const checked = document.getElementById('f-notif').checked;
+  document.getElementById('cond-notif-time').classList.toggle('show', checked);
+  if (checked) {
+    const granted = await requestNotifPermission();
+    if (!granted) {
+      document.getElementById('f-notif').checked = false;
+      document.getElementById('cond-notif-time').classList.remove('show');
+      alert('Please allow notifications in your browser to use this feature.');
+    }
+  }
+}
+
+initNotifications();
 </script>
 </body>
 </html>
