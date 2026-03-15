@@ -757,8 +757,23 @@ async function initNotifications() {
   if (!('serviceWorker' in navigator) || !('Notification' in window)) return;
   try {
     swReg = await navigator.serviceWorker.register('/sw.js');
+    // Wait for SW to be ready then send objectives
+    await navigator.serviceWorker.ready;
+    swReg = await navigator.serviceWorker.getRegistration();
+    sendToSW();
   } catch(e) { console.warn('SW registration failed:', e); }
 }
+
+function sendToSW() {
+  if (!swReg) return;
+  const sw = swReg.active || swReg.installing || swReg.waiting;
+  if (sw) sw.postMessage({ type: 'SCHEDULE', objectives });
+}
+
+// Re-send objectives to SW when tab becomes visible
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) sendToSW();
+});
 
 async function requestNotifPermission() {
   if (notifPermission === 'granted') return true;
@@ -767,28 +782,28 @@ async function requestNotifPermission() {
 }
 
 function scheduleNotifications() {
-  // Send objectives to SW
-  if (swReg && swReg.active) {
-    swReg.active.postMessage({ type: 'SCHEDULE', objectives });
-  }
-  // Also run a local interval check (works while tab is open)
+  sendToSW();
   if (notifInterval) clearInterval(notifInterval);
+  const fired = new Set();
   notifInterval = setInterval(() => {
     if (notifPermission !== 'granted') return;
     const now = new Date();
     const hhmm = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
-    // Only fire at the exact minute (prevent double-firing)
-    if (now.getSeconds() > 5) return;
+    const dateKey = now.toDateString() + '-' + hhmm;
     for (const obj of objectives) {
       if (obj.notif && obj.notif_time === hhmm) {
-        new Notification('Objectives — ' + obj.title, {
-          body: obj.desc || 'Time to work on your objective.',
-          icon: '/icon.png',
-          tag: 'obj-' + obj.id
-        });
+        const key = 'obj-' + obj.id + '-' + dateKey;
+        if (!fired.has(key)) {
+          fired.add(key);
+          new Notification('Objectives — ' + obj.title, {
+            body: obj.desc || 'Time to work on your objective.',
+            tag: 'obj-' + obj.id,
+            requireInteraction: true
+          });
+        }
       }
     }
-  }, 10000); // check every 10s
+  }, 5000);
 }
 
 // Hook into notif toggle — ask permission when turned on
