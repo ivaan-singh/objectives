@@ -30,12 +30,24 @@ async function initDB() {
       freq TEXT NOT NULL DEFAULT 'daily',
       days TEXT DEFAULT '[]',
       dates TEXT DEFAULT '[]',
+      months TEXT DEFAULT '[]',
+      year_dates TEXT DEFAULT '[]',
+      custom_freq TEXT DEFAULT '',
       color TEXT DEFAULT 'rust',
       start_date TEXT,
       end_date TEXT,
+      notif BOOLEAN DEFAULT FALSE,
+      notif_time TEXT,
       created_at TIMESTAMP DEFAULT NOW()
     );
   `);
+  // Add new columns if upgrading existing DB
+  const cols = ['months','year_dates','custom_freq','notif','notif_time'];
+  for (const col of cols) {
+    await pool.query(`ALTER TABLE objectives ADD COLUMN IF NOT EXISTS ${col} ${
+      col==='notif'?'BOOLEAN DEFAULT FALSE':col==='months'||col==='year_dates'?'TEXT DEFAULT \'[]\'':'TEXT DEFAULT \'\''
+    }`).catch(()=>{});
+  }
   console.log('Database ready');
 }
 
@@ -112,9 +124,17 @@ function serveStatic(req, res) {
 function fmtObj(row) {
   return {
     id: row.id, title: row.title, desc: row.description,
-    freq: row.freq, days: JSON.parse(row.days || '[]'),
-    dates: JSON.parse(row.dates || '[]'), color: row.color,
-    start: row.start_date, end: row.end_date, created: row.created_at
+    freq: row.freq,
+    days: JSON.parse(row.days || '[]'),
+    dates: JSON.parse(row.dates || '[]'),
+    months: JSON.parse(row.months || '[]'),
+    year_dates: JSON.parse(row.year_dates || '[]'),
+    custom_freq: row.custom_freq || '',
+    color: row.color,
+    start: row.start_date, end: row.end_date,
+    notif: row.notif || false,
+    notif_time: row.notif_time || null,
+    created: row.created_at
   };
 }
 
@@ -175,8 +195,14 @@ async function router(req, res) {
       const d = await readBody(req);
       if (!d.title) return json(res, { error: 'Title required' }, 400);
       const result = await pool.query(
-        `INSERT INTO objectives (user_id,title,description,freq,days,dates,color,start_date,end_date) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-        [user.user_id, d.title, d.desc||'', d.freq||'daily', JSON.stringify(d.days||[]), JSON.stringify(d.dates||[]), d.color||'rust', d.start||null, d.end||null]
+        `INSERT INTO objectives (user_id,title,description,freq,days,dates,months,year_dates,custom_freq,color,start_date,end_date,notif,notif_time)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
+        [user.user_id, d.title, d.desc||'', d.freq||'daily',
+         JSON.stringify(d.days||[]), JSON.stringify(d.dates||[]),
+         JSON.stringify(d.months||[]), JSON.stringify(d.year_dates||[]),
+         d.custom_freq||'', d.color||'rust',
+         d.start||null, d.end||null,
+         d.notif||false, d.notif_time||null]
       );
       return json(res, fmtObj(result.rows[0]), 201);
     }
@@ -189,8 +215,15 @@ async function router(req, res) {
       if (!check.rows[0]) return json(res, { error: 'Not found' }, 404);
       const d = await readBody(req);
       await pool.query(
-        `UPDATE objectives SET title=$1,description=$2,freq=$3,days=$4,dates=$5,color=$6,start_date=$7,end_date=$8 WHERE id=$9 AND user_id=$10`,
-        [d.title, d.desc!=null?d.desc:'', d.freq, JSON.stringify(d.days||[]), JSON.stringify(d.dates||[]), d.color, d.start||null, d.end||null, id, user.user_id]
+        `UPDATE objectives SET title=$1,description=$2,freq=$3,days=$4,dates=$5,months=$6,year_dates=$7,custom_freq=$8,color=$9,start_date=$10,end_date=$11,notif=$12,notif_time=$13
+         WHERE id=$14 AND user_id=$15`,
+        [d.title, d.desc!=null?d.desc:'', d.freq,
+         JSON.stringify(d.days||[]), JSON.stringify(d.dates||[]),
+         JSON.stringify(d.months||[]), JSON.stringify(d.year_dates||[]),
+         d.custom_freq||'', d.color,
+         d.start||null, d.end||null,
+         d.notif||false, d.notif_time||null,
+         id, user.user_id]
       );
       return json(res, { ok: true });
     }
@@ -222,7 +255,7 @@ process.on('unhandledRejection', err => console.error('Unhandled:', err));
 initDB().then(() => {
   const server = http.createServer(router);
   server.on('error', err => { console.error('Server error:', err.message); process.exit(1); });
-  server.listen(PORT, '0.0.0.0', () => console.log(`Intentions running → http://localhost:${PORT}`));
+  server.listen(PORT, '0.0.0.0', () => console.log(`Objectives running → http://localhost:${PORT}`));
 }).catch(err => {
   console.error('Failed to connect to database:', err.message);
   process.exit(1);
