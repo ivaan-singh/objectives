@@ -416,6 +416,7 @@ body{background:var(--bg);color:var(--ink);font-family:'Instrument Sans',sans-se
       <div class="cond" id="cond-notif-time" style="margin-top:10px;">
         <label class="fl">Reminder time</label>
         <input class="fi" id="f-notif-time" type="time" value="09:00">
+        <button type="button" onclick="testNotif()" style="margin-top:8px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-family:'DM Mono',monospace;font-size:11px;color:var(--ink2);cursor:pointer;">Send test notification</button>
         <p class="fhint" style="margin-top:8px;">Ensure you have notifications allowed for <a href="https://objectives-ckp9.onrender.com/" target="_blank" style="color:var(--accent3);text-decoration:none;border-bottom:1px solid var(--accent3);">this site</a> and your browser. Only works on Chrome or Edge.</p>
       </div>
     </div>
@@ -429,9 +430,11 @@ body{background:var(--bg);color:var(--ink);font-family:'Instrument Sans',sans-se
 </div>
 
 <script>
+// ── State ──
 let objectives=[], editingId=null, navFilter='all', chipFilter='all';
 let selColor='rust', selDays=[], selDates=[], selMonths=[], selYearDates=[];
 let openMenu=null, currentUser=null;
+let notifTimers=[];
 const today=new Date().toISOString().split('T')[0];
 
 // Build monthly dates grid
@@ -456,6 +459,7 @@ const today=new Date().toISOString().split('T')[0];
   }
 })();
 
+// ── API ──
 async function api(method,path,body){
   const opts={method,headers:{'Content-Type':'application/json'},credentials:'include'};
   if(body) opts.body=JSON.stringify(body);
@@ -465,6 +469,7 @@ async function api(method,path,body){
   return data;
 }
 
+// ── Auth ──
 function switchTab(tab){
   document.querySelectorAll('.auth-tab').forEach((t,i)=>t.classList.toggle('active',(tab==='login'&&i===0)||(tab==='register'&&i===1)));
   document.getElementById('login-form').style.display=tab==='login'?'':'none';
@@ -505,9 +510,9 @@ async function initApp(username){
   document.getElementById('content-screen').classList.remove('visible');
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   await loadObjectives();
-  const allNav=document.querySelector('.nav-item');
-  showFilter('all', allNav);
+  showFilter('all', document.querySelector('.nav-item'));
 }
+
 async function loadObjectives(){
   try{
     objectives=await api('GET','/objectives');
@@ -517,6 +522,7 @@ async function loadObjectives(){
   }catch(e){console.error(e);}
 }
 
+// ── Nav ──
 function showFilter(type,el){
   navFilter=type;chipFilter='all';
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
@@ -535,6 +541,7 @@ function applyChip(f,btn){
   render();
 }
 
+// ── Filter ──
 function getVisible(){
   return objectives.filter(o=>{
     const byNav=navFilter==='all'||o.freq===navFilter;
@@ -543,11 +550,10 @@ function getVisible(){
   });
 }
 
+// ── Counts ──
 function updateCounts(){
   const g={daily:0,weekly:0,monthly:0,yearly:0,custom:0};
-  objectives.forEach(o=>{
-    if(g[o.freq]!==undefined) g[o.freq]++;
-  });
+  objectives.forEach(o=>{if(g[o.freq]!==undefined) g[o.freq]++;});
   document.getElementById('c-all').textContent=objectives.length;
   document.getElementById('c-daily').textContent=g.daily;
   document.getElementById('c-weekly').textContent=g.weekly;
@@ -556,6 +562,7 @@ function updateCounts(){
   document.getElementById('c-custom').textContent=g.custom;
 }
 
+// ── Render ──
 function render(){
   const grid=document.getElementById('cards-grid');
   const list=getVisible();
@@ -595,6 +602,7 @@ function render(){
   }).join('');
 }
 
+// ── Dropdown ──
 function toggleMenu(e,id){
   e.stopPropagation();
   const menu=document.getElementById(id);
@@ -604,6 +612,7 @@ function toggleMenu(e,id){
 }
 document.addEventListener('click',()=>{if(openMenu){openMenu.classList.remove('open');openMenu=null;}});
 
+// ── Modal ──
 function openModal(id){
   editingId=id||null;
   selDays=[];selDates=[];selMonths=[];selYearDates=[];selColor='rust';
@@ -611,7 +620,6 @@ function openModal(id){
   document.getElementById('modal-error').textContent='';
   document.getElementById('f-notif').checked=false;
   document.getElementById('cond-notif-time').classList.remove('show');
-
   if(id){
     const o=objectives.find(x=>x.id===id);
     document.getElementById('modal-title').textContent='Edit Objective';
@@ -651,7 +659,6 @@ function openModal(id){
 }
 function closeModal(){document.getElementById('overlay').classList.remove('open');editingId=null;}
 function overlayClick(e){if(e.target===document.getElementById('overlay'))closeModal();}
-
 function onFreqChange(){
   const f=document.getElementById('f-freq').value;
   document.getElementById('cond-days').classList.toggle('show',f==='weekly');
@@ -659,8 +666,17 @@ function onFreqChange(){
   document.getElementById('cond-yearly').classList.toggle('show',f==='yearly');
   document.getElementById('cond-custom').classList.toggle('show',f==='custom');
 }
-function onNotifChange(){
-  document.getElementById('cond-notif-time').classList.toggle('show',document.getElementById('f-notif').checked);
+async function onNotifChange(){
+  const checked=document.getElementById('f-notif').checked;
+  document.getElementById('cond-notif-time').classList.toggle('show',checked);
+  if(checked){
+    const granted=await requestNotifPermission();
+    if(!granted){
+      document.getElementById('f-notif').checked=false;
+      document.getElementById('cond-notif-time').classList.remove('show');
+      alert('Please allow notifications in your browser settings.');
+    }
+  }
 }
 function pickColor(c){selColor=c;document.querySelectorAll('.swatch').forEach(s=>s.classList.toggle('on',s.dataset.c===c));}
 function toggleDay(btn){
@@ -694,8 +710,7 @@ async function saveObj(){
   const freq=document.getElementById('f-freq').value;
   const notif=document.getElementById('f-notif').checked;
   const payload={
-    title,
-    desc:document.getElementById('f-desc').value.trim(),
+    title,desc:document.getElementById('f-desc').value.trim(),
     freq,color:selColor,
     days:freq==='weekly'?[...selDays]:[],
     dates:freq==='monthly'?[...selDates].sort((a,b)=>a-b):[],
@@ -704,8 +719,7 @@ async function saveObj(){
     custom_freq:freq==='custom'?document.getElementById('f-custom').value.trim():'',
     start:document.getElementById('f-start').value,
     end:document.getElementById('f-end').value||null,
-    notif,
-    notif_time:notif?document.getElementById('f-notif-time').value:null
+    notif,notif_time:notif?document.getElementById('f-notif-time').value:null
   };
   try{
     if(editingId){await api('PUT','/objectives/'+editingId,payload);}
@@ -719,6 +733,7 @@ async function deleteObj(id){
   try{await api('DELETE','/objectives/'+id);await loadObjectives();}catch(e){alert(e.message);}
 }
 
+// ── Helpers ──
 function fmtFreq(o){
   if(o.freq==='daily') return 'Daily';
   if(o.freq==='weekly') return o.days&&o.days.length?o.days.join(', '):'Weekly';
@@ -743,84 +758,54 @@ function timeSince(ts){
 }
 function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 
+// ── Notifications ──
+async function requestNotifPermission(){
+  if(Notification.permission==='granted') return true;
+  const p=await Notification.requestPermission();
+  return p==='granted';
+}
+
+async function testNotif(){
+  const granted=await requestNotifPermission();
+  if(!granted){alert('Notifications are blocked. Please allow them in your browser settings.');return;}
+  new Notification('Objectives — Test',{body:'Notifications are working!',requireInteraction:true});
+}
+
+function scheduleNotifications(){
+  // Clear existing timers
+  notifTimers.forEach(t=>clearTimeout(t));
+  notifTimers=[];
+  if(Notification.permission!=='granted') return;
+  const now=new Date();
+  for(const obj of objectives){
+    if(!obj.notif||!obj.notif_time) continue;
+    const [hh,mm]=obj.notif_time.split(':').map(Number);
+    const target=new Date();
+    target.setHours(hh,mm,0,0);
+    if(target<=now) target.setDate(target.getDate()+1);
+    const delay=target-now;
+    const t=setTimeout(function(){
+      new Notification('Objectives — '+obj.title,{
+        body:obj.desc||'Time to work on your objective.',
+        tag:'obj-'+obj.id,
+        requireInteraction:true
+      });
+      scheduleNotifications();
+    },delay);
+    notifTimers.push(t);
+  }
+}
+
+// Register service worker
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('/sw.js').catch(e=>console.warn('SW failed:',e));
+}
+
+// Boot
 (async function(){
   try{const r=await api('GET','/me');await initApp(r.username);}
   catch(e){}
 })();
-
-// ── Notifications ──
-let notifPermission = Notification.permission;
-let swReg = null;
-let notifInterval = null;
-
-async function initNotifications() {
-  if (!('serviceWorker' in navigator) || !('Notification' in window)) return;
-  try {
-    swReg = await navigator.serviceWorker.register('/sw.js');
-    // Wait for SW to be ready then send objectives
-    await navigator.serviceWorker.ready;
-    swReg = await navigator.serviceWorker.getRegistration();
-    sendToSW();
-  } catch(e) { console.warn('SW registration failed:', e); }
-}
-
-function sendToSW() {
-  if (!swReg) return;
-  const sw = swReg.active || swReg.installing || swReg.waiting;
-  if (sw) sw.postMessage({ type: 'SCHEDULE', objectives });
-}
-
-// Re-send objectives to SW when tab becomes visible
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) sendToSW();
-});
-
-async function requestNotifPermission() {
-  if (notifPermission === 'granted') return true;
-  notifPermission = await Notification.requestPermission();
-  return notifPermission === 'granted';
-}
-
-function scheduleNotifications() {
-  sendToSW();
-  if (notifInterval) clearInterval(notifInterval);
-  const fired = new Set();
-  notifInterval = setInterval(() => {
-    if (notifPermission !== 'granted') return;
-    const now = new Date();
-    const hhmm = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
-    const dateKey = now.toDateString() + '-' + hhmm;
-    for (const obj of objectives) {
-      if (obj.notif && obj.notif_time === hhmm) {
-        const key = 'obj-' + obj.id + '-' + dateKey;
-        if (!fired.has(key)) {
-          fired.add(key);
-          new Notification('Objectives — ' + obj.title, {
-            body: obj.desc || 'Time to work on your objective.',
-            tag: 'obj-' + obj.id,
-            requireInteraction: true
-          });
-        }
-      }
-    }
-  }, 5000);
-}
-
-// Hook into notif toggle — ask permission when turned on
-async function onNotifChange() {
-  const checked = document.getElementById('f-notif').checked;
-  document.getElementById('cond-notif-time').classList.toggle('show', checked);
-  if (checked) {
-    const granted = await requestNotifPermission();
-    if (!granted) {
-      document.getElementById('f-notif').checked = false;
-      document.getElementById('cond-notif-time').classList.remove('show');
-      alert('Please allow notifications in your browser to use this feature.');
-    }
-  }
-}
-
-initNotifications();
 </script>
 </body>
 </html>
